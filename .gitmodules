@@ -1,0 +1,6 @@
+[submodule "vendored/emsdk"]
+	path = vendored/emsdk
+	url = https://github.com/emscripten-core/emsdk.git
+[submodule "vendored/SDL"]
+	path = vendored/SDL
+	url = https://github.com/libsdl-org/SDL.git
