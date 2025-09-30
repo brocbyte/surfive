@@ -21,9 +21,21 @@ if(EMSCRIPTEN)
   target_link_libraries(surfive PRIVATE SDL3::SDL3)
 else()
   add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
-  add_subdirectory(vendored/SDL_net)
   add_executable(server server.cpp)
-  target_link_libraries(server PRIVATE SDL3::SDL3 SDL3_net::SDL3_net)
+  target_link_libraries(server PRIVATE SDL3::SDL3)
+
+  target_include_directories(server PRIVATE
+    vendored/websocketpp
+    vendored/asio/asio/include
+  )
+
+  target_compile_definitions(server PRIVATE
+      ASIO_STANDALONE             # use standalone Asio
+      _WEBSOCKETPP_CPP11_INTERNAL_ # enable C++11 in WebSocket++
+      # _WEBSOCKETPP_CPP11_CHRONO_   # chrono support
+      # _WEBSOCKETPP_CPP11_RANDOM_DEVICE_ # random_device support
+      # _WEBSOCKETPP_CPP11_ASIO_     # force io_context instead of io_service
+  )
 endif()
 
 

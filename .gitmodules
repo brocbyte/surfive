@@ -4,6 +4,9 @@
 [submodule "vendored/SDL"]
 	path = vendored/SDL
 	url = https://github.com/libsdl-org/SDL.git
-[submodule "vendored/SDL_net"]
-	path = vendored/SDL_net
-	url = https://github.com/libsdl-org/SDL_net.git
+[submodule "vendored/asio"]
+	path = vendored/asio
+	url = https://github.com/chriskohlhoff/asio.git
+[submodule "vendored/websocketpp"]
+	path = vendored/websocketpp
+	url = https://github.com/zaphoyd/websocketpp.git
