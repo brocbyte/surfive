@@ -1,10 +1,11 @@
-﻿#include <emscripten/websocket.h>
+﻿#include "websocket.h"
 
-#define SDL_MAIN_USE_CALLBACKS 1 /* use the callbacks instead of main() */
+#define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
-/* We will use this renderer to draw into this window every frame. */
+#include <string>
+
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 static SDL_Texture *texture = NULL;
@@ -14,38 +15,32 @@ static int texture_height = 0;
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
 
-EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
-  SDL_Log("onopen");
+std::unique_ptr<Websocket> ws;
 
-  EMSCRIPTEN_RESULT result;
-  result = emscripten_websocket_send_utf8_text(websocketEvent->socket, "hoge");
-  if (result) {
-    SDL_Log("Failed to emscripten_websocket_send_utf8_text(): %d\n", result);
-  }
+EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
+  SDL_Log("WebSocket connection opened.\n");
   return EM_TRUE;
 }
 
 EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
                   void *userData) {
-  SDL_Log("New connection!");
+  std::string s((const char *)socketEvent->data, socketEvent->numBytes);
+  SDL_Log("%s", s.c_str());
   return EM_TRUE;
 }
 
-/* This function runs once at startup. */
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   SDL_Surface *surface = NULL;
   char *bmp_path = NULL;
 
-  SDL_SetAppMetadata("Example Renderer Affine Textures", "1.0",
-                     "com.example.renderer-affine-textures");
+  SDL_SetAppMetadata("Surfive", "1.0", "");
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
 
-  if (!SDL_CreateWindowAndRenderer("examples/renderer/affine-textures", WINDOW_WIDTH, WINDOW_HEIGHT,
-                                   0, &window, &renderer)) {
+  if (!SDL_CreateWindowAndRenderer("surfive", WINDOW_WIDTH, WINDOW_HEIGHT, 0, &window, &renderer)) {
     SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
@@ -64,7 +59,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
-  SDL_free(bmp_path); /* done with this, the file is loaded. */
+  SDL_free(bmp_path);
 
   texture_width = surface->w;
   texture_height = surface->h;
@@ -82,24 +77,24 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
-  EmscriptenWebSocketCreateAttributes ws_attrs = {"ws://192.168.0.79:9002", NULL, EM_TRUE};
-
-  EMSCRIPTEN_WEBSOCKET_T ws = emscripten_websocket_new(&ws_attrs);
-  emscripten_websocket_set_onopen_callback(ws, NULL, onopen);
-  emscripten_websocket_set_onmessage_callback(ws, NULL, onmessage);
+  ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
   return SDL_APP_CONTINUE; /* carry on with the program! */
 }
 
-/* This function runs when a new event (mouse input, keypresses, etc) occurs. */
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) {
-    return SDL_APP_SUCCESS; /* end the program, reporting success to the OS. */
+    return SDL_APP_SUCCESS;
   }
-  return SDL_APP_CONTINUE; /* carry on with the program! */
+  if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+    EMSCRIPTEN_RESULT result = ws->send_utf8_text("Mouse down!");
+    if (result) {
+      SDL_Log("Failed to emscripten_websocket_send_utf8_text(): %d\n", result);
+    }
+  }
+  return SDL_APP_CONTINUE;
 }
 
-/* This function runs once per frame, and is the heart of the program. */
 SDL_AppResult SDL_AppIterate(void *appstate) {
   const float x0 = 0.5f * WINDOW_WIDTH;
   const float y0 = 0.5f * WINDOW_HEIGHT;
@@ -160,5 +155,4 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   return SDL_APP_CONTINUE;
 }
 
-/* This function runs once at shutdown. */
 void SDL_AppQuit(void *appstate, SDL_AppResult result) { SDL_DestroyTexture(texture); }
