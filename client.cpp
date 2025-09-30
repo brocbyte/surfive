@@ -1,4 +1,6 @@
-﻿#define SDL_MAIN_USE_CALLBACKS 1 /* use the callbacks instead of main() */
+﻿#include <emscripten/websocket.h>
+
+#define SDL_MAIN_USE_CALLBACKS 1 /* use the callbacks instead of main() */
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
@@ -11,6 +13,23 @@ static int texture_height = 0;
 
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
+
+EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
+  SDL_Log("onopen");
+
+  EMSCRIPTEN_RESULT result;
+  result = emscripten_websocket_send_utf8_text(websocketEvent->socket, "hoge");
+  if (result) {
+    SDL_Log("Failed to emscripten_websocket_send_utf8_text(): %d\n", result);
+  }
+  return EM_TRUE;
+}
+
+EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
+                  void *userData) {
+  SDL_Log("New connection!");
+  return EM_TRUE;
+}
 
 /* This function runs once at startup. */
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
@@ -57,6 +76,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
 
   SDL_DestroySurface(surface); /* done with this, the texture has a copy of the pixels now. */
+
+  if (!emscripten_websocket_is_supported()) {
+    SDL_Log("WebSockets are not supported in this environment.\n");
+    return SDL_APP_FAILURE;
+  }
+
+  EmscriptenWebSocketCreateAttributes ws_attrs = {"ws://192.168.0.79:9002", NULL, EM_TRUE};
+
+  EMSCRIPTEN_WEBSOCKET_T ws = emscripten_websocket_new(&ws_attrs);
+  emscripten_websocket_set_onopen_callback(ws, NULL, onopen);
+  emscripten_websocket_set_onmessage_callback(ws, NULL, onmessage);
 
   return SDL_APP_CONTINUE; /* carry on with the program! */
 }
@@ -131,6 +161,4 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 }
 
 /* This function runs once at shutdown. */
-void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-  SDL_DestroyTexture(texture);
-}
+void SDL_AppQuit(void *appstate, SDL_AppResult result) { SDL_DestroyTexture(texture); }

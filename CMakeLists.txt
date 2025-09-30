@@ -17,24 +17,18 @@ if(EMSCRIPTEN)
   add_executable (surfive WIN32 "client.cpp" )
   set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
   set_target_properties(surfive PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp)
-  set_target_properties(surfive PROPERTIES LINK_FLAGS "--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp@./sample.bmp -sALLOW_MEMORY_GROWTH ")
+  set_target_properties(surfive PROPERTIES LINK_FLAGS "-lwebsocket.js --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp@./sample.bmp -sALLOW_MEMORY_GROWTH ")
   target_link_libraries(surfive PRIVATE SDL3::SDL3)
 else()
-  add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
   add_executable(server server.cpp)
-  target_link_libraries(server PRIVATE SDL3::SDL3)
-
   target_include_directories(server PRIVATE
     vendored/websocketpp
     vendored/asio/asio/include
   )
 
   target_compile_definitions(server PRIVATE
-      ASIO_STANDALONE             # use standalone Asio
-      _WEBSOCKETPP_CPP11_INTERNAL_ # enable C++11 in WebSocket++
-      # _WEBSOCKETPP_CPP11_CHRONO_   # chrono support
-      # _WEBSOCKETPP_CPP11_RANDOM_DEVICE_ # random_device support
-      # _WEBSOCKETPP_CPP11_ASIO_     # force io_context instead of io_service
+      ASIO_STANDALONE
+      _WEBSOCKETPP_CPP11_INTERNAL_
   )
 endif()
 
