@@ -1,3 +1,4 @@
+#pragma once
 #include <emscripten/websocket.h>
 #include <memory>
 #include <stdexcept>

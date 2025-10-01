@@ -1,10 +1,12 @@
 ﻿#include "websocket.h"
+#include "surface.h"
 
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include <string>
+#include <format>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
@@ -15,10 +17,12 @@ static int texture_height = 0;
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
 
+uint64_t now = 0;
+
 std::unique_ptr<Websocket> ws;
 
 EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
-  SDL_Log("WebSocket connection opened.\n");
+  SDL_Log("WebSocket connection opened\n");
   return EM_TRUE;
 }
 
@@ -30,9 +34,6 @@ EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEv
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
-  SDL_Surface *surface = NULL;
-  char *bmp_path = NULL;
-
   SDL_SetAppMetadata("Surfive", "1.0", "");
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -45,41 +46,28 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
+  std::string bmp_path = std::format("{}sample.bmp", SDL_GetBasePath());
+  SurfaceBMP surface(bmp_path.c_str());
+
   /* Textures are pixel data that we upload to the video hardware for fast drawing. Lots of 2D
      engines refer to these as "sprites." We'll do a static texture (upload once, draw many
      times) with data from a bitmap file. */
 
-  /* SDL_Surface is pixel data the CPU can access. SDL_Texture is pixel data the GPU can access.
+  /* SDL_Texture is pixel data the GPU can access.
      Load a .bmp into a surface, move it to a texture from there. */
-  SDL_asprintf(&bmp_path, "%ssample.bmp",
-               SDL_GetBasePath()); /* allocate a string of the full file path */
-  surface = SDL_LoadBMP(bmp_path);
-  if (!surface) {
-    SDL_Log("Couldn't load bitmap: %s", SDL_GetError());
-    return SDL_APP_FAILURE;
-  }
 
-  SDL_free(bmp_path);
+  texture_width = surface.get()->w;
+  texture_height = surface.get()->h;
 
-  texture_width = surface->w;
-  texture_height = surface->h;
-
-  texture = SDL_CreateTextureFromSurface(renderer, surface);
+  texture = SDL_CreateTextureFromSurface(renderer, surface.get());
   if (!texture) {
     SDL_Log("Couldn't create static texture: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
 
-  SDL_DestroySurface(surface); /* done with this, the texture has a copy of the pixels now. */
-
-  if (!emscripten_websocket_is_supported()) {
-    SDL_Log("WebSockets are not supported in this environment.\n");
-    return SDL_APP_FAILURE;
-  }
-
   ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
-  return SDL_APP_CONTINUE; /* carry on with the program! */
+  return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
@@ -100,7 +88,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   const float y0 = 0.5f * WINDOW_HEIGHT;
   const float px = SDL_min(WINDOW_WIDTH, WINDOW_HEIGHT) / SDL_sqrtf(3.0f);
 
-  const Uint64 now = SDL_GetTicks();
+  const Uint64 now = 0;//SDL_GetTicks();
   const float rad = (((float)((int)(now % 2000))) / 2000.0f) * SDL_PI_F * 2;
   const float cos = SDL_cosf(rad);
   const float sin = SDL_sinf(rad);
