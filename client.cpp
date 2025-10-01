@@ -17,7 +17,7 @@ static int texture_height = 0;
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
 
-uint64_t now = 0;
+int64_t now = 0;
 
 std::unique_ptr<Websocket> ws;
 
@@ -80,6 +80,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       SDL_Log("Failed to emscripten_websocket_send_utf8_text(): %d\n", result);
     }
   }
+  if (event->type == SDL_EVENT_MOUSE_MOTION) {
+    if (event->motion.state & SDL_BUTTON_LMASK) {
+      now += event->motion.xrel;
+    }
+  }
   return SDL_APP_CONTINUE;
 }
 
@@ -88,8 +93,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   const float y0 = 0.5f * WINDOW_HEIGHT;
   const float px = SDL_min(WINDOW_WIDTH, WINDOW_HEIGHT) / SDL_sqrtf(3.0f);
 
-  const Uint64 now = 0;//SDL_GetTicks();
-  const float rad = (((float)((int)(now % 2000))) / 2000.0f) * SDL_PI_F * 2;
+  const float rad = (((float)((int)((now + 2000) % 2000))) / 2000.0f) * SDL_PI_F * 2;
   const float cos = SDL_cosf(rad);
   const float sin = SDL_sinf(rad);
   const float k[3] = {3.0f / SDL_sqrtf(50.0f), 4.0f / SDL_sqrtf(50.0f), 5.0f / SDL_sqrtf(50.0f)};
