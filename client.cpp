@@ -77,6 +77,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
   ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
+  SDL_AddTimer(
+      3000,
+      [](void * /*userdata*/, SDL_TimerID /*timerID*/, Uint32 interval) -> Uint32 {
+        SDL_Log("avg %.2f min %llu max %llu frame time over last %llu frames\n",
+                g_timers.framePerf.avg_diff(), g_timers.framePerf.min_diff(),
+                g_timers.framePerf.max_diff(), g_timers.framePerf.count());
+        g_timers.framePerf.restart(SDL_GetTicks());
+        return interval;
+      },
+      NULL);
+
   return SDL_APP_CONTINUE;
 }
 
@@ -99,15 +110,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
-  auto currentTime = SDL_GetTicks();
-  g_timers.framePerf.tick(currentTime);
-
-  if (currentTime - g_timers.lastFrameRateReport > 3000) {
-    g_timers.lastFrameRateReport = currentTime;
-    SDL_Log("Average frame time over last %llu frames: %.2f ms\n", g_timers.framePerf.count(),
-            g_timers.framePerf.avg_diff());
-    g_timers.framePerf = PerfCounter<uint64_t>(currentTime);
-  }
+  g_timers.framePerf.tick(SDL_GetTicks());
 
   const float x0 = 0.5f * WINDOW_WIDTH;
   const float y0 = 0.5f * WINDOW_HEIGHT;
