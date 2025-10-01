@@ -1,5 +1,6 @@
 ﻿#include "websocket.h"
 #include "surface.h"
+#include "perf_counter.h"
 
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -16,6 +17,15 @@ static int texture_height = 0;
 
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
+
+struct GlobalTimers {
+  uint64_t lastFrameStarted = 0;
+  uint64_t lastFrameRateReport = 0;
+
+  PerfCounter<uint64_t> framePerf{0};
+};
+
+GlobalTimers g_timers;
 
 int64_t now = 0;
 
@@ -89,6 +99,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
+  auto currentTime = SDL_GetTicks();
+  g_timers.framePerf.tick(currentTime);
+
+  if (currentTime - g_timers.lastFrameRateReport > 3000) {
+    g_timers.lastFrameRateReport = currentTime;
+    SDL_Log("Average frame time over last %llu frames: %.2f ms\n", g_timers.framePerf.count(),
+            g_timers.framePerf.avg_diff());
+    g_timers.framePerf = PerfCounter<uint64_t>(currentTime);
+  }
+
   const float x0 = 0.5f * WINDOW_WIDTH;
   const float y0 = 0.5f * WINDOW_HEIGHT;
   const float px = SDL_min(WINDOW_WIDTH, WINDOW_HEIGHT) / SDL_sqrtf(3.0f);
