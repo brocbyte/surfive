@@ -28,8 +28,11 @@ struct GlobalTimers {
 GlobalTimers g_timers;
 
 int64_t now = 0;
+int64_t last_now = 0;
 
 std::unique_ptr<Websocket> ws;
+
+int my_id = 0;
 
 EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
   SDL_Log("WebSocket connection opened\n");
@@ -39,7 +42,11 @@ EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent
 EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
                   void *userData) {
   std::string s((const char *)socketEvent->data, socketEvent->numBytes);
-  SDL_Log("%s", s.c_str());
+  // SDL_Log("%s", s.c_str());
+  std::string payload(s.begin(), s.begin() + s.find('|'));
+  std::string id(s.begin() + s.find('|') + 1, s.end());
+  now = std::stoi(payload);
+  last_now = now;
   return EM_TRUE;
 }
 
@@ -75,6 +82,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
+  my_id = std::rand() + std::rand();
+  SDL_Log("my_id: %d\n", my_id);
   ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
   SDL_AddTimer(
@@ -86,7 +95,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         g_timers.framePerf.restart(SDL_GetTicks());
         return interval;
       },
-      NULL);
+      nullptr);
+
+  SDL_AddTimer(
+      10,
+      [](void * /*userdata*/, SDL_TimerID /*timerID*/, Uint32 interval) -> Uint32 {
+        if (now != last_now) {
+          std::string msg = std::to_string(now) + "|" + std::to_string(my_id);
+          ws->send_utf8_text(msg.c_str());
+          last_now = now;
+        }
+        return interval;
+      },
+      nullptr);
 
   return SDL_APP_CONTINUE;
 }
@@ -94,12 +115,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) {
     return SDL_APP_SUCCESS;
-  }
-  if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-    EMSCRIPTEN_RESULT result = ws->send_utf8_text("Mouse down!");
-    if (result) {
-      SDL_Log("Failed to emscripten_websocket_send_utf8_text(): %d\n", result);
-    }
   }
   if (event->type == SDL_EVENT_MOUSE_MOTION) {
     if (event->motion.state & SDL_BUTTON_LMASK) {
