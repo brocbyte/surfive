@@ -225,9 +225,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       now += event->motion.xrel;
     }
   }
-  if (event->type == SDL_EVENT_KEY_DOWN) {
-    EM_ASM(Module.requestFullscreen(1, 1));
-  }
   return SDL_APP_CONTINUE;
 }
 

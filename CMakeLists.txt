@@ -17,9 +17,15 @@ if(EMSCRIPTEN)
   add_executable(surfive WIN32 "client.cpp")
   set_target_properties(surfive PROPERTIES SUFFIX ".html")
   set_target_properties(surfive PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp)
-  set_target_properties(surfive PROPERTIES LINK_FLAGS "-sASYNCIFY=1 --use-port=emdawnwebgpu -lwebsocket.js --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp@./sample.bmp -sALLOW_MEMORY_GROWTH ")
+  set_target_properties(surfive PROPERTIES LINK_FLAGS
+    "-sASYNCIFY=1 \
+--use-port=emdawnwebgpu \
+--shell-file ${CMAKE_SOURCE_DIR}/index.html \
+-lwebsocket.js \
+--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp@./sample.bmp
+-sALLOW_MEMORY_GROWTH")
   set_target_properties(surfive PROPERTIES COMPILE_WARNING_AS_ERROR ON)
-  target_link_libraries(surfive PUBLIC SDL3::SDL3)# sdl3webgpu)
+  target_link_libraries(surfive PUBLIC SDL3::SDL3)
   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=emdawnwebgpu")
 else()
   add_executable(server server.cpp)

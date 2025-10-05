@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Surfive</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background-color: black;
+        }
+
+        /* Optional: prevent text selection, etc. */
+        body,
+        canvas {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        // Emscripten runtime configuration
+        var Module = {
+            canvas: (function () {
+                const canvas = document.getElementById('canvas');
+
+                // Resize canvas to fill window
+                function resizeCanvas() {
+                    canvas.width = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                    if (Module.onResize) Module.onResize(canvas.width, canvas.height);
+                }
+
+                window.addEventListener('resize', resizeCanvas);
+                resizeCanvas(); // Initial size
+
+                return canvas;
+            })(),
+        };
+    </script>
+
+    {{{ SCRIPT }}}
+</body>
+
+</html>
