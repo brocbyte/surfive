@@ -23,6 +23,10 @@ wgpu::TextureFormat format;
 const uint32_t kWidth = 512;
 const uint32_t kHeight = 512;
 
+static SDL_Window *window = NULL;
+PerfCounter<uint64_t> framePerf{0};
+std::unique_ptr<Websocket> ws;
+
 const char shaderCode[] = R"(
     @vertex fn vertexMain(@builtin(vertex_index) i : u32) ->
       @builtin(position) vec4f {
@@ -30,7 +34,7 @@ const char shaderCode[] = R"(
         return vec4f(pos[i], 0, 1);
     }
     @fragment fn fragmentMain() -> @location(0) vec4f {
-        return vec4f(0, 1, 0, 1);
+        return vec4f(1, 1, 0, 1);
     }
 )";
 
@@ -86,19 +90,6 @@ void InitGraphics() {
   ConfigureSurface();
   CreateRenderPipeline();
 }
-
-static SDL_Window *window = NULL;
-
-#define WINDOW_WIDTH 640
-#define WINDOW_HEIGHT 480
-
-struct GlobalTimers {
-  PerfCounter<uint64_t> framePerf{0};
-};
-
-GlobalTimers g_timers;
-
-std::unique_ptr<Websocket> ws;
 
 EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
   SDL_Log("WebSocket connection opened\n");
@@ -175,9 +166,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       3000,
       [](void * /*userdata*/, SDL_TimerID /*timerID*/, Uint32 interval) -> Uint32 {
         SDL_Log("avg %.2f min %llu max %llu frame time over last %llu frames\n",
-                g_timers.framePerf.avg_diff(), g_timers.framePerf.min_diff(),
-                g_timers.framePerf.max_diff(), g_timers.framePerf.count());
-        g_timers.framePerf.restart(SDL_GetTicks());
+                framePerf.avg_diff(), framePerf.min_diff(), framePerf.max_diff(),
+                framePerf.count());
+        framePerf.restart(SDL_GetTicks());
         return interval;
       },
       nullptr);
@@ -193,7 +184,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
-  g_timers.framePerf.tick(SDL_GetTicks());
+  framePerf.tick(SDL_GetTicks());
   Render();
   return SDL_APP_CONTINUE;
 }

@@ -19,14 +19,17 @@ if(EMSCRIPTEN)
   set_target_properties(surfive PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp)
   set_target_properties(surfive PROPERTIES LINK_FLAGS
     "-sASYNCIFY=1 \
+-sASSERTIONS=2 \
+-sWEBSOCKET_DEBUG=1 \
 --use-port=emdawnwebgpu \
 --shell-file ${CMAKE_SOURCE_DIR}/index.html \
 -lwebsocket.js \
 --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp@./sample.bmp
--sALLOW_MEMORY_GROWTH")
+-sALLOW_MEMORY_GROWTH
+-g -gsource-map=inline")
   set_target_properties(surfive PROPERTIES COMPILE_WARNING_AS_ERROR ON)
   target_link_libraries(surfive PUBLIC SDL3::SDL3)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=emdawnwebgpu")
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=emdawnwebgpu -g -gsource-map=inline")
 else()
   add_executable(server server.cpp)
   target_include_directories(server PRIVATE

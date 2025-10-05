@@ -1,1 +1,1 @@
-python -m http.server 8000 --bind 0.0.0.0 --directory build_web/Debug
+python -m http.server 8000 --bind 0.0.0.0 --directory .
