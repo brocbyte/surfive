@@ -88,29 +88,17 @@ void InitGraphics() {
 }
 
 static SDL_Window *window = NULL;
-static SDL_Renderer *renderer = NULL;
-static SDL_Texture *texture = NULL;
-static int texture_width = 0;
-static int texture_height = 0;
 
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
 
 struct GlobalTimers {
-  uint64_t lastFrameStarted = 0;
-  uint64_t lastFrameRateReport = 0;
-
   PerfCounter<uint64_t> framePerf{0};
 };
 
 GlobalTimers g_timers;
 
-int64_t now = 0;
-int64_t last_now = 0;
-
 std::unique_ptr<Websocket> ws;
-
-int my_id = 0;
 
 EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
   SDL_Log("WebSocket connection opened\n");
@@ -120,11 +108,7 @@ EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent
 EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
                   void *userData) {
   std::string s((const char *)socketEvent->data, socketEvent->numBytes);
-  // SDL_Log("%s", s.c_str());
-  std::string payload(s.begin(), s.begin() + s.find('|'));
-  std::string id(s.begin() + s.find('|') + 1, s.end());
-  now = std::stoi(payload);
-  last_now = now;
+  SDL_Log("onmessage: %s", s.c_str());
   return EM_TRUE;
 }
 
@@ -170,7 +154,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
-  SDL_Window *window = SDL_CreateWindow("Learn WebGPU", 640, 480, 0);
+  window = SDL_CreateWindow("surfive", 640, 480, 0);
 
   wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector fromCanvasHTMLSelector;
   fromCanvasHTMLSelector.sType = wgpu::SType::EmscriptenSurfaceSourceCanvasHTMLSelector;
@@ -182,12 +166,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   surfaceDescriptor.nextInChain = &fromCanvasHTMLSelector;
 
   surface = instance.CreateSurface(&surfaceDescriptor);
-  SDL_Log("surface = %p", (void *)&surface);
 
   InitGraphics();
 
-  my_id = std::rand() + std::rand();
-  SDL_Log("my_id: %d\n", my_id);
   ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
   SDL_AddTimer(
@@ -201,29 +182,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       },
       nullptr);
 
-  SDL_AddTimer(
-      10,
-      [](void * /*userdata*/, SDL_TimerID /*timerID*/, Uint32 interval) -> Uint32 {
-        if (now != last_now) {
-          std::string msg = std::to_string(now) + "|" + std::to_string(my_id);
-          ws->send_utf8_text(msg.c_str());
-          last_now = now;
-        }
-        return interval;
-      },
-      nullptr);
-
   return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) {
     return SDL_APP_SUCCESS;
-  }
-  if (event->type == SDL_EVENT_MOUSE_MOTION) {
-    if (event->motion.state & SDL_BUTTON_LMASK) {
-      now += event->motion.xrel;
-    }
   }
   return SDL_APP_CONTINUE;
 }
@@ -234,4 +198,4 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   return SDL_APP_CONTINUE;
 }
 
-void SDL_AppQuit(void *appstate, SDL_AppResult result) { SDL_DestroyTexture(texture); }
+void SDL_AppQuit(void *appstate, SDL_AppResult result) {}
