@@ -28,6 +28,7 @@ wgpu::Buffer vertexBuffer;
 wgpu::Buffer offsetBuffer;
 wgpu::Buffer velocityBuffer;
 wgpu::Buffer paramsBuffer;
+wgpu::Buffer colorBuffer;
 
 int32_t VERTEX_COUNT = 32;
 int32_t DISK_COUNT = 50;
@@ -80,6 +81,7 @@ float rand01() {
 void CreateStorageBuffers() {
   std::vector<float> offsets(2 * DISK_COUNT);
   std::vector<float> velocities(2 * DISK_COUNT);
+  std::vector<float> colors(4 * DISK_COUNT);
   for (int i = 0; i < DISK_COUNT; ++i) {
     offsets[2 * i + 0] = 1.8 * rand01() - 0.9;
     offsets[2 * i + 1] = 1.8 * rand01() - 0.9;
@@ -87,6 +89,10 @@ void CreateStorageBuffers() {
     float theta = 2 * std::numbers::pi * rand01();
     velocities[2 * i + 0] = speed * std::cos(theta);
     velocities[2 * i + 1] = speed * std::sin(theta);
+    colors[4 * i + 0] = rand01();
+    colors[4 * i + 1] = rand01();
+    colors[4 * i + 2] = rand01();
+    colors[4 * i + 3] = 1.0f;
   }
   std::array<float, 3> params = {static_cast<float>(DISK_COUNT), 0.1f, 0.03f};
   std::vector<float> vertexCoords(2 * DISK_COUNT + 2);
@@ -125,6 +131,12 @@ void CreateStorageBuffers() {
                                           .size = vertexCoords.size() * sizeof(vertexCoords[0])};
   vertexBuffer = device.CreateBuffer(&vertexBufferDesc);
   device.GetQueue().WriteBuffer(vertexBuffer, 0, vertexCoords.data(), vertexBufferDesc.size);
+
+  wgpu::BufferDescriptor colorBufferDesc{.usage = wgpu::BufferUsage::Storage |
+                                                  wgpu::BufferUsage::CopyDst,
+                                         .size = colors.size() * sizeof(colors[0])};
+  colorBuffer = device.CreateBuffer(&colorBufferDesc);
+  device.GetQueue().WriteBuffer(colorBuffer, 0, colors.data(), colorBufferDesc.size);
 }
 
 void CreateComputePipeline() {
@@ -191,17 +203,16 @@ const char shaderCode[] = R"(
    }
    
    @group(0) @binding(0) var<storage> diskOffsets : array<vec2f>;
+   @group(0) @binding(1) var<storage> colors : array<vec4f>;
    @vertex
    fn vertexMain(@builtin(vertex_index) i : u32,
              @builtin(instance_index) diskNum : u32,
              @location(0) position: vec2f) -> VertexOutput {
       let offset = diskOffsets[diskNum];
-      let color = vec3f(1.0, 0.2, 0.0);
+      let color = colors[diskNum];
       var output : VertexOutput;
-      const pos = array(vec2f(0, 1), vec2f(-1, -1), vec2f(1, -1));
       output.position = vec4f(position + offset, 0, 1);
-      //output.position = vec4f(pos[i], 0, 1);
-      output.color = vec4f(1,0.4,0,1);
+      output.color = color;
       return output;
    }
    
@@ -255,8 +266,9 @@ void CreateRenderPipeline() {
       .fragment = &fragmentState};
   pipeline = device.CreateRenderPipeline(&descriptor);
 
-  std::array<wgpu::BindGroupEntry, 1> entries{
-      {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.GetSize()}}};
+  std::array<wgpu::BindGroupEntry, 2> entries{
+      {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.GetSize()},
+       {.binding = 1, .buffer = colorBuffer, .offset = 0, .size = colorBuffer.GetSize()}}};
   wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Render Bind Group",
                                                 .layout = pipeline.GetBindGroupLayout(0),
                                                 .entryCount = entries.size(),
