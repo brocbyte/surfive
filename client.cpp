@@ -8,6 +8,7 @@
 
 #include <webgpu/webgpu.h>
 #include <webgpu/webgpu_cpp.h>
+#include "gpu_buffer.h"
 
 #include <string>
 #include <format>
@@ -24,14 +25,14 @@ wgpu::BindGroup renderBindGroup;
 wgpu::ComputePipeline computePipeline;
 wgpu::BindGroup computeBindGroup;
 
-wgpu::Buffer vertexBuffer;
-wgpu::Buffer offsetBuffer;
-wgpu::Buffer velocityBuffer;
-wgpu::Buffer paramsBuffer;
-wgpu::Buffer colorBuffer;
+GPUBuffer vertexBuffer;
+GPUBuffer offsetBuffer;
+GPUBuffer velocityBuffer;
+GPUBuffer paramsBuffer;
+GPUBuffer colorBuffer;
 
-int32_t VERTEX_COUNT = 32;
-int32_t DISK_COUNT = 50;
+constexpr int32_t VERTEX_COUNT = 32;
+constexpr int32_t DISK_COUNT = 500;
 
 wgpu::Surface surface;
 wgpu::TextureFormat format;
@@ -95,7 +96,7 @@ void CreateStorageBuffers() {
     colors[4 * i + 3] = 1.0f;
   }
   std::array<float, 3> params = {static_cast<float>(DISK_COUNT), 0.1f, 0.03f};
-  std::vector<float> vertexCoords(2 * DISK_COUNT + 2);
+  std::vector<float> vertexCoords(2 * VERTEX_COUNT + 2);
   vertexCoords[0] = 0.1;
   vertexCoords[1] = 0;
   for (int i = 1; i <= VERTEX_COUNT / 2 - 1; i++) {
@@ -108,39 +109,27 @@ void CreateStorageBuffers() {
   vertexCoords[2 * VERTEX_COUNT - 2] = -0.1;
   vertexCoords[2 * VERTEX_COUNT - 1] = 0;
 
-  wgpu::BufferDescriptor offsetBufferDesc{.usage = wgpu::BufferUsage::Storage |
-                                                   wgpu::BufferUsage::CopyDst,
-                                          .size = offsets.size() * sizeof(offsets[0])};
-  offsetBuffer = device.CreateBuffer(&offsetBufferDesc);
-  device.GetQueue().WriteBuffer(offsetBuffer, 0, offsets.data(), offsetBufferDesc.size);
+  using enum wgpu::BufferUsage;
 
-  wgpu::BufferDescriptor velocitiesBufferDesc{.usage = wgpu::BufferUsage::Storage |
-                                                       wgpu::BufferUsage::CopyDst,
-                                              .size = velocities.size() * sizeof(velocities[0])};
-  velocityBuffer = device.CreateBuffer(&velocitiesBufferDesc);
-  device.GetQueue().WriteBuffer(velocityBuffer, 0, velocities.data(), velocitiesBufferDesc.size);
+  offsetBuffer = GPUBuffer(device, Storage | CopyDst, offsets.size() * sizeof(offsets[0]));
+  offsetBuffer.write(offsets.begin(), offsets.end());
 
-  wgpu::BufferDescriptor paramsBufferDesc{.usage = wgpu::BufferUsage::Storage |
-                                                   wgpu::BufferUsage::CopyDst,
-                                          .size = params.size() * sizeof(params[0])};
-  paramsBuffer = device.CreateBuffer(&paramsBufferDesc);
-  device.GetQueue().WriteBuffer(paramsBuffer, 0, params.data(), paramsBufferDesc.size);
+  velocityBuffer = GPUBuffer(device, Storage | CopyDst, velocities.size() * sizeof(velocities[0]));
+  velocityBuffer.write(velocities.begin(), velocities.end());
 
-  wgpu::BufferDescriptor vertexBufferDesc{.usage = wgpu::BufferUsage::Vertex |
-                                                   wgpu::BufferUsage::CopyDst,
-                                          .size = vertexCoords.size() * sizeof(vertexCoords[0])};
-  vertexBuffer = device.CreateBuffer(&vertexBufferDesc);
-  device.GetQueue().WriteBuffer(vertexBuffer, 0, vertexCoords.data(), vertexBufferDesc.size);
+  paramsBuffer = GPUBuffer(device, Storage | CopyDst, params.size() * sizeof(params[0]));
+  paramsBuffer.write(params.begin(), params.end());
 
-  wgpu::BufferDescriptor colorBufferDesc{.usage = wgpu::BufferUsage::Storage |
-                                                  wgpu::BufferUsage::CopyDst,
-                                         .size = colors.size() * sizeof(colors[0])};
-  colorBuffer = device.CreateBuffer(&colorBufferDesc);
-  device.GetQueue().WriteBuffer(colorBuffer, 0, colors.data(), colorBufferDesc.size);
+  vertexBuffer = GPUBuffer(device, Vertex | CopyDst, vertexCoords.size() * sizeof(vertexCoords[0]));
+  vertexBuffer.write(vertexCoords.begin(), vertexCoords.end());
+
+  colorBuffer = GPUBuffer(device, Storage | CopyDst, colors.size() * sizeof(colors[0]));
+  colorBuffer.write(colors.begin(), colors.end());
 }
 
-void CreateComputePipeline() {
-  wgpu::ShaderSourceWGSL wgsl{{.code = computeShaderCode}};
+auto CreateShaderModule(const char *code) {
+  wgpu::ShaderSourceWGSL wgsl{{.code = code}};
+
   wgpu::ShaderModuleDescriptor shaderModuleDescriptor{.nextInChain = &wgsl};
   device.PushErrorScope(wgpu::ErrorFilter::Validation);
   wgpu::ShaderModule shaderModule = device.CreateShaderModule(&shaderModuleDescriptor);
@@ -149,6 +138,11 @@ void CreateComputePipeline() {
       [](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, const char *message) {
         std::cerr << "Device error: " << message << std::endl;
       });
+  return shaderModule;
+}
+
+void CreateComputePipeline() {
+  auto shaderModule = CreateShaderModule(computeShaderCode);
 
   std::array<wgpu::BindGroupLayoutEntry, 3> bindGroupLayoutEntries{
       {{.binding = 0,
@@ -196,7 +190,7 @@ void update(float dt) {
   device.GetQueue().Submit(1, &commands);
 }
 
-const char shaderCode[] = R"(
+const char renderShader[] = R"(
   struct VertexOutput {
        @builtin(position) position : vec4f,
        @location(0) @interpolate(flat) color : vec4f
@@ -222,109 +216,12 @@ const char shaderCode[] = R"(
    }
 )";
 
-void ConfigureSurface() {
-  wgpu::SurfaceCapabilities capabilities;
-  surface.GetCapabilities(adapter, &capabilities);
-  format = capabilities.formats[0];
-
-  wgpu::SurfaceConfiguration config{.device = device,
-                                    .format = format,
-                                    .width = kWidth,
-                                    .height = kHeight,
-                                    .presentMode = wgpu::PresentMode::Fifo};
-  surface.Configure(&config);
-}
-
-void CreateRenderPipeline() {
-  wgpu::ShaderSourceWGSL wgsl{{.code = shaderCode}};
-
-  wgpu::ShaderModuleDescriptor shaderModuleDescriptor{.nextInChain = &wgsl};
-  device.PushErrorScope(wgpu::ErrorFilter::Validation);
-  wgpu::ShaderModule shaderModule = device.CreateShaderModule(&shaderModuleDescriptor);
-  device.PopErrorScope(
-      wgpu::CallbackMode::WaitAnyOnly,
-      [](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, const char *message) {
-        std::cerr << "Device error: " << message << std::endl;
-      });
-
-  wgpu::ColorTargetState colorTargetState{.format = format};
-
-  wgpu::FragmentState fragmentState{
-      .module = shaderModule, .targetCount = 1, .targets = &colorTargetState};
-
-  wgpu::VertexAttribute vertexAttribute{
-      .format = wgpu::VertexFormat::Float32x2, .offset = 0, .shaderLocation = 0};
-  wgpu::VertexBufferLayout vertexBufferLayout{
-      .stepMode = wgpu::VertexStepMode::Vertex,
-      .arrayStride = 8,
-      .attributeCount = 1,
-      .attributes = &vertexAttribute,
-  };
-  wgpu::RenderPipelineDescriptor descriptor{
-      .vertex = {.module = shaderModule, .bufferCount = 1, .buffers = &vertexBufferLayout},
-      .primitive = {.topology = wgpu::PrimitiveTopology::TriangleStrip},
-      .fragment = &fragmentState};
-  pipeline = device.CreateRenderPipeline(&descriptor);
-
-  std::array<wgpu::BindGroupEntry, 2> entries{
-      {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.GetSize()},
-       {.binding = 1, .buffer = colorBuffer, .offset = 0, .size = colorBuffer.GetSize()}}};
-  wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Render Bind Group",
-                                                .layout = pipeline.GetBindGroupLayout(0),
-                                                .entryCount = entries.size(),
-                                                .entries = entries.data()};
-  renderBindGroup = device.CreateBindGroup(&bindGroupDescriptor);
-}
-
-void Render() {
-  wgpu::SurfaceTexture surfaceTexture;
-  surface.GetCurrentTexture(&surfaceTexture);
-
-  wgpu::RenderPassColorAttachment attachment{.view = surfaceTexture.texture.CreateView(),
-                                             .loadOp = wgpu::LoadOp::Clear,
-                                             .storeOp = wgpu::StoreOp::Store};
-
-  wgpu::RenderPassDescriptor renderpass{.colorAttachmentCount = 1, .colorAttachments = &attachment};
-
-  wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-  wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
-  pass.SetPipeline(pipeline);
-  pass.SetVertexBuffer(0, vertexBuffer);
-  pass.SetBindGroup(0, renderBindGroup);
-  pass.Draw(VERTEX_COUNT, DISK_COUNT);
-  pass.End();
-  wgpu::CommandBuffer commands = encoder.Finish();
-  device.GetQueue().Submit(1, &commands);
-}
-
-void InitGraphics() {
-  ConfigureSurface();
-  CreateStorageBuffers();
-  CreateRenderPipeline();
-
-  CreateComputePipeline();
-}
-
-EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
-  SDL_Log("WebSocket connection opened\n");
-  return EM_TRUE;
-}
-
-EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
-                  void *userData) {
-  std::string s((const char *)socketEvent->data, socketEvent->numBytes);
-  SDL_Log("onmessage: %s", s.c_str());
-  return EM_TRUE;
-}
-
-SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
-  SDL_SetAppMetadata("Surfive", "1.0", "");
-
+auto CreateInstance() {
   static const auto kTimedWaitAny = wgpu::InstanceFeatureName::TimedWaitAny;
   wgpu::InstanceDescriptor instanceDesc{.requiredFeatureCount = 1,
                                         .requiredFeatures = &kTimedWaitAny};
 
-  instance = wgpu::CreateInstance(&instanceDesc);
+  auto instance = wgpu::CreateInstance(&instanceDesc);
 
   wgpu::Future f1 = instance.RequestAdapter(
       nullptr, wgpu::CallbackMode::WaitAnyOnly,
@@ -354,25 +251,118 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       });
   instance.WaitAny(f2, UINT64_MAX);
 
+  return instance;
+}
+
+auto CreateSurface() {
+  wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector fromCanvasHTMLSelector;
+  fromCanvasHTMLSelector.sType = wgpu::SType::EmscriptenSurfaceSourceCanvasHTMLSelector;
+  fromCanvasHTMLSelector.selector = "canvas";
+
+  wgpu::SurfaceDescriptor surfaceDescriptor{.nextInChain = &fromCanvasHTMLSelector,
+                                            .label = "HTML5 surface"};
+
+  return instance.CreateSurface(&surfaceDescriptor);
+}
+
+void ConfigureSurface() {
+  wgpu::SurfaceCapabilities capabilities;
+  surface.GetCapabilities(adapter, &capabilities);
+  format = capabilities.formats[0];
+
+  wgpu::SurfaceConfiguration config{.device = device,
+                                    .format = format,
+                                    .width = kWidth,
+                                    .height = kHeight,
+                                    .presentMode = wgpu::PresentMode::Fifo};
+  surface.Configure(&config);
+}
+
+void CreateRenderPipeline() {
+  auto shaderModule = CreateShaderModule(renderShader);
+
+  wgpu::ColorTargetState colorTargetState{.format = format};
+
+  wgpu::FragmentState fragmentState{
+      .module = shaderModule, .targetCount = 1, .targets = &colorTargetState};
+
+  wgpu::VertexAttribute vertexAttribute{
+      .format = wgpu::VertexFormat::Float32x2, .offset = 0, .shaderLocation = 0};
+  wgpu::VertexBufferLayout vertexBufferLayout{
+      .stepMode = wgpu::VertexStepMode::Vertex,
+      .arrayStride = 8,
+      .attributeCount = 1,
+      .attributes = &vertexAttribute,
+  };
+  wgpu::RenderPipelineDescriptor descriptor{
+      .vertex = {.module = shaderModule, .bufferCount = 1, .buffers = &vertexBufferLayout},
+      .primitive = {.topology = wgpu::PrimitiveTopology::TriangleStrip},
+      .fragment = &fragmentState};
+  pipeline = device.CreateRenderPipeline(&descriptor);
+
+  std::array<wgpu::BindGroupEntry, 2> entries{
+      {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.size()},
+       {.binding = 1, .buffer = colorBuffer, .offset = 0, .size = colorBuffer.size()}}};
+  wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Render Bind Group",
+                                                .layout = pipeline.GetBindGroupLayout(0),
+                                                .entryCount = entries.size(),
+                                                .entries = entries.data()};
+  renderBindGroup = device.CreateBindGroup(&bindGroupDescriptor);
+}
+
+void Render() {
+  wgpu::SurfaceTexture surfaceTexture;
+  surface.GetCurrentTexture(&surfaceTexture);
+
+  wgpu::RenderPassColorAttachment attachment{.view = surfaceTexture.texture.CreateView(),
+                                             .loadOp = wgpu::LoadOp::Clear,
+                                             .storeOp = wgpu::StoreOp::Store};
+
+  wgpu::RenderPassDescriptor renderpass{.colorAttachmentCount = 1, .colorAttachments = &attachment};
+
+  wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+  wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+  pass.SetPipeline(pipeline);
+  pass.SetVertexBuffer(0, vertexBuffer);
+  pass.SetBindGroup(0, renderBindGroup);
+  pass.Draw(VERTEX_COUNT, DISK_COUNT);
+  pass.End();
+  wgpu::CommandBuffer commands = encoder.Finish();
+  device.GetQueue().Submit(1, &commands);
+}
+
+void InitGraphics() {
+  instance = CreateInstance();
+  surface = CreateSurface();
+  ConfigureSurface();
+  CreateStorageBuffers();
+  CreateRenderPipeline();
+  CreateComputePipeline();
+}
+
+EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
+  SDL_Log("WebSocket connection opened\n");
+  return EM_TRUE;
+}
+
+EM_BOOL onmessage(int eventType, const EmscriptenWebSocketMessageEvent *socketEvent,
+                  void *userData) {
+  std::string s((const char *)socketEvent->data, socketEvent->numBytes);
+  SDL_Log("onmessage: %s", s.c_str());
+  return EM_TRUE;
+}
+
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+  SDL_SetAppMetadata("Surfive", "1.0", "");
+
+  InitGraphics();
+
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
 
   window = SDL_CreateWindow("surfive", 640, 480, 0);
-
-  wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector fromCanvasHTMLSelector;
-  fromCanvasHTMLSelector.sType = wgpu::SType::EmscriptenSurfaceSourceCanvasHTMLSelector;
-  fromCanvasHTMLSelector.nextInChain = NULL;
-  fromCanvasHTMLSelector.selector = WGPUStringView{.data = "canvas", .length = 6};
-
-  wgpu::SurfaceDescriptor surfaceDescriptor = {};
-  surfaceDescriptor.label = "HTML5 surface";
-  surfaceDescriptor.nextInChain = &fromCanvasHTMLSelector;
-
-  surface = instance.CreateSurface(&surfaceDescriptor);
-
-  InitGraphics();
 
   ws = Websocket::create("ws://192.168.0.79:9002", onopen, onmessage);
 
