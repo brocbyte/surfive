@@ -188,7 +188,7 @@ void update(float dt) {
 
   passEncoder.SetPipeline(computePipeline);
   passEncoder.SetBindGroup(0, computeBindGroup);
-  int32_t workGroupCount = std::ceil((2 * DISK_COUNT) / 64);
+  int32_t workGroupCount = std::ceil((2.0 * DISK_COUNT) / 64);
   passEncoder.DispatchWorkgroups(workGroupCount);
   passEncoder.End();
 
