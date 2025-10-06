@@ -45,7 +45,6 @@
                 function resizeCanvas() {
                     canvas.width = window.innerWidth;
                     canvas.height = window.innerHeight;
-                    if (Module.onResize) Module.onResize(canvas.width, canvas.height);
                 }
 
                 window.addEventListener('resize', resizeCanvas);

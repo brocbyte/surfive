@@ -12,11 +12,25 @@
 #include <string>
 #include <format>
 #include <iostream>
+#include <random>
+#include <numbers>
 
 wgpu::Instance instance;
 wgpu::Adapter adapter;
 wgpu::Device device;
 wgpu::RenderPipeline pipeline;
+wgpu::BindGroup renderBindGroup;
+
+wgpu::ComputePipeline computePipeline;
+wgpu::BindGroup computeBindGroup;
+
+wgpu::Buffer vertexBuffer;
+wgpu::Buffer offsetBuffer;
+wgpu::Buffer velocityBuffer;
+wgpu::Buffer paramsBuffer;
+
+int32_t VERTEX_COUNT = 32;
+int32_t DISK_COUNT = 50;
 
 wgpu::Surface surface;
 wgpu::TextureFormat format;
@@ -27,15 +41,174 @@ static SDL_Window *window = NULL;
 PerfCounter<uint64_t> framePerf{0};
 std::unique_ptr<Websocket> ws;
 
+const char computeShaderCode[] = R"(
+  @group(0) @binding(0) var<storage,read_write> diskOffsets : array<f32>;
+  @group(0) @binding(1) var<storage,read_write> diskVelocities : array<f32>;
+
+  @group(0) @binding(2) var<storage> params : array<f32, 3>;
+
+  @compute @workgroup_size(64)
+  fn main(@builtin(global_invocation_id) global_id : vec3u ) {
+    let index = global_id.x; // Invocation number, to be used as an array index.
+       let diskCount = u32(params[0]); // params[0] is the number of disks.
+       if ( index >= 2*diskCount) { // Prevent extra invocations from doing work.
+          return;
+       }
+       let radius = params[1];  // params[i] is the radius of the disks.
+       let dt = params[2];  // params[2] is the time change since previous update.
+       var position = diskOffsets[index];
+       position += diskVelocities[index] * dt;
+       if (position > 1-radius) { // position puts part of disk outside board.
+           diskVelocities[index] = -diskVelocities[index]; // reverse direction.
+           position = 2*(1-radius) - position; // new position after bounce.
+       }
+       else if (position < -1+radius) {
+           diskVelocities[index] = -diskVelocities[index];
+           position = 2*(-1+radius) - position;
+       }
+       diskOffsets[index] = position;   
+  }
+)";
+
+float rand01() {
+  static std::random_device rd;
+  static std::mt19937 gen(rd());
+  static std::uniform_real_distribution<> dis(0.0, 1.0);
+  return dis(gen);
+}
+
+void CreateStorageBuffers() {
+  std::vector<float> offsets(2 * DISK_COUNT);
+  std::vector<float> velocities(2 * DISK_COUNT);
+  for (int i = 0; i < DISK_COUNT; ++i) {
+    offsets[2 * i + 0] = 1.8 * rand01() - 0.9;
+    offsets[2 * i + 1] = 1.8 * rand01() - 0.9;
+    float speed = 0.1 + 0.5 * rand01();
+    float theta = 2 * std::numbers::pi * rand01();
+    velocities[2 * i + 0] = speed * std::cos(theta);
+    velocities[2 * i + 1] = speed * std::sin(theta);
+  }
+  std::array<float, 3> params = {static_cast<float>(DISK_COUNT), 0.1f, 0.03f};
+  std::vector<float> vertexCoords(2 * DISK_COUNT + 2);
+  vertexCoords[0] = 0.1;
+  vertexCoords[1] = 0;
+  for (int i = 1; i <= VERTEX_COUNT / 2 - 1; i++) {
+    float angle = 2 * 3.14 / VERTEX_COUNT * i;
+    vertexCoords[4 * (i - 1) + 2] = 0.1 * std::cos(angle);
+    vertexCoords[4 * (i - 1) + 3] = -0.1 * std::sin(angle);
+    vertexCoords[4 * (i - 1) + 4] = 0.1 * std::cos(angle);
+    vertexCoords[4 * (i - 1) + 5] = 0.1 * std::sin(angle);
+  }
+  vertexCoords[2 * VERTEX_COUNT - 2] = -0.1;
+  vertexCoords[2 * VERTEX_COUNT - 1] = 0;
+
+  wgpu::BufferDescriptor offsetBufferDesc{.usage = wgpu::BufferUsage::Storage |
+                                                   wgpu::BufferUsage::CopyDst,
+                                          .size = offsets.size() * sizeof(offsets[0])};
+  offsetBuffer = device.CreateBuffer(&offsetBufferDesc);
+  device.GetQueue().WriteBuffer(offsetBuffer, 0, offsets.data(), offsetBufferDesc.size);
+
+  wgpu::BufferDescriptor velocitiesBufferDesc{.usage = wgpu::BufferUsage::Storage |
+                                                       wgpu::BufferUsage::CopyDst,
+                                              .size = velocities.size() * sizeof(velocities[0])};
+  velocityBuffer = device.CreateBuffer(&velocitiesBufferDesc);
+  device.GetQueue().WriteBuffer(velocityBuffer, 0, velocities.data(), velocitiesBufferDesc.size);
+
+  wgpu::BufferDescriptor paramsBufferDesc{.usage = wgpu::BufferUsage::Storage |
+                                                   wgpu::BufferUsage::CopyDst,
+                                          .size = params.size() * sizeof(params[0])};
+  paramsBuffer = device.CreateBuffer(&paramsBufferDesc);
+  device.GetQueue().WriteBuffer(paramsBuffer, 0, params.data(), paramsBufferDesc.size);
+
+  wgpu::BufferDescriptor vertexBufferDesc{.usage = wgpu::BufferUsage::Vertex |
+                                                   wgpu::BufferUsage::CopyDst,
+                                          .size = vertexCoords.size() * sizeof(vertexCoords[0])};
+  vertexBuffer = device.CreateBuffer(&vertexBufferDesc);
+  device.GetQueue().WriteBuffer(vertexBuffer, 0, vertexCoords.data(), vertexBufferDesc.size);
+}
+
+void CreateComputePipeline() {
+  wgpu::ShaderSourceWGSL wgsl{{.code = computeShaderCode}};
+  wgpu::ShaderModuleDescriptor shaderModuleDescriptor{.nextInChain = &wgsl};
+  device.PushErrorScope(wgpu::ErrorFilter::Validation);
+  wgpu::ShaderModule shaderModule = device.CreateShaderModule(&shaderModuleDescriptor);
+  device.PopErrorScope(
+      wgpu::CallbackMode::WaitAnyOnly,
+      [](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, const char *message) {
+        std::cerr << "Device error: " << message << std::endl;
+      });
+
+  std::array<wgpu::BindGroupLayoutEntry, 3> bindGroupLayoutEntries{
+      {{.binding = 0,
+        .visibility = wgpu::ShaderStage::Compute,
+        .buffer = {.type = wgpu::BufferBindingType::Storage}},
+       {.binding = 1,
+        .visibility = wgpu::ShaderStage::Compute,
+        .buffer = {.type = wgpu::BufferBindingType::Storage}},
+       {.binding = 2,
+        .visibility = wgpu::ShaderStage::Compute,
+        .buffer = {.type = wgpu::BufferBindingType::ReadOnlyStorage}}}};
+  wgpu::BindGroupLayoutDescriptor bindGroupLayoutDescriptor{
+      .entryCount = bindGroupLayoutEntries.size(), .entries = bindGroupLayoutEntries.data()};
+  wgpu::BindGroupLayout bindGroupLayout = device.CreateBindGroupLayout(&bindGroupLayoutDescriptor);
+  wgpu::PipelineLayoutDescriptor pipelineLayoutDescriptor{.bindGroupLayoutCount = 1,
+                                                          .bindGroupLayouts = &bindGroupLayout};
+  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&pipelineLayoutDescriptor);
+
+  wgpu::ComputePipelineDescriptor pipelineDescriptor{
+      .layout = pipelineLayout, .compute = {.module = shaderModule, .entryPoint = "main"}};
+
+  computePipeline = device.CreateComputePipeline(&pipelineDescriptor);
+
+  std::array<wgpu::BindGroupEntry, 3> entries{{{.binding = 0, .buffer = offsetBuffer},
+                                               {.binding = 1, .buffer = velocityBuffer},
+                                               {.binding = 2, .buffer = paramsBuffer}}};
+  wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Compute Bind Group",
+                                                .layout = computePipeline.GetBindGroupLayout(0),
+                                                .entryCount = entries.size(),
+                                                .entries = entries.data()};
+  computeBindGroup = device.CreateBindGroup(&bindGroupDescriptor);
+}
+
+void update(float dt) {
+  wgpu::CommandEncoder commandEncoder = device.CreateCommandEncoder();
+  wgpu::ComputePassEncoder passEncoder = commandEncoder.BeginComputePass();
+
+  passEncoder.SetPipeline(computePipeline);
+  passEncoder.SetBindGroup(0, computeBindGroup);
+  int32_t workGroupCount = std::ceil((2 * DISK_COUNT) / 64);
+  passEncoder.DispatchWorkgroups(workGroupCount);
+  passEncoder.End();
+
+  wgpu::CommandBuffer commands = commandEncoder.Finish();
+  device.GetQueue().Submit(1, &commands);
+}
+
 const char shaderCode[] = R"(
-    @vertex fn vertexMain(@builtin(vertex_index) i : u32) ->
-      @builtin(position) vec4f {
-        const pos = array(vec2f(0, 1), vec2f(-1, -1), vec2f(1, -1));
-        return vec4f(pos[i], 0, 1);
-    }
-    @fragment fn fragmentMain() -> @location(0) vec4f {
-        return vec4f(1, 1, 0, 1);
-    }
+  struct VertexOutput {
+       @builtin(position) position : vec4f,
+       @location(0) @interpolate(flat) color : vec4f
+   }
+   
+   @group(0) @binding(0) var<storage> diskOffsets : array<vec2f>;
+   @vertex
+   fn vertexMain(@builtin(vertex_index) i : u32,
+             @builtin(instance_index) diskNum : u32,
+             @location(0) position: vec2f) -> VertexOutput {
+      let offset = diskOffsets[diskNum];
+      let color = vec3f(1.0, 0.2, 0.0);
+      var output : VertexOutput;
+      const pos = array(vec2f(0, 1), vec2f(-1, -1), vec2f(1, -1));
+      output.position = vec4f(position + offset, 0, 1);
+      //output.position = vec4f(pos[i], 0, 1);
+      output.color = vec4f(1,0.4,0,1);
+      return output;
+   }
+   
+   @fragment
+   fn fragmentMain( @location(0) @interpolate(flat) color : vec4f) -> @location(0) vec4f{
+      return color;
+   }
 )";
 
 void ConfigureSurface() {
@@ -55,16 +228,40 @@ void CreateRenderPipeline() {
   wgpu::ShaderSourceWGSL wgsl{{.code = shaderCode}};
 
   wgpu::ShaderModuleDescriptor shaderModuleDescriptor{.nextInChain = &wgsl};
+  device.PushErrorScope(wgpu::ErrorFilter::Validation);
   wgpu::ShaderModule shaderModule = device.CreateShaderModule(&shaderModuleDescriptor);
+  device.PopErrorScope(
+      wgpu::CallbackMode::WaitAnyOnly,
+      [](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, const char *message) {
+        std::cerr << "Device error: " << message << std::endl;
+      });
 
   wgpu::ColorTargetState colorTargetState{.format = format};
 
   wgpu::FragmentState fragmentState{
       .module = shaderModule, .targetCount = 1, .targets = &colorTargetState};
 
-  wgpu::RenderPipelineDescriptor descriptor{.vertex = {.module = shaderModule},
-                                            .fragment = &fragmentState};
+  wgpu::VertexAttribute vertexAttribute{
+      .format = wgpu::VertexFormat::Float32x2, .offset = 0, .shaderLocation = 0};
+  wgpu::VertexBufferLayout vertexBufferLayout{
+      .stepMode = wgpu::VertexStepMode::Vertex,
+      .arrayStride = 8,
+      .attributeCount = 1,
+      .attributes = &vertexAttribute,
+  };
+  wgpu::RenderPipelineDescriptor descriptor{
+      .vertex = {.module = shaderModule, .bufferCount = 1, .buffers = &vertexBufferLayout},
+      .primitive = {.topology = wgpu::PrimitiveTopology::TriangleStrip},
+      .fragment = &fragmentState};
   pipeline = device.CreateRenderPipeline(&descriptor);
+
+  std::array<wgpu::BindGroupEntry, 1> entries{
+      {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.GetSize()}}};
+  wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Render Bind Group",
+                                                .layout = pipeline.GetBindGroupLayout(0),
+                                                .entryCount = entries.size(),
+                                                .entries = entries.data()};
+  renderBindGroup = device.CreateBindGroup(&bindGroupDescriptor);
 }
 
 void Render() {
@@ -80,7 +277,9 @@ void Render() {
   wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
   wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
   pass.SetPipeline(pipeline);
-  pass.Draw(3);
+  pass.SetVertexBuffer(0, vertexBuffer);
+  pass.SetBindGroup(0, renderBindGroup);
+  pass.Draw(VERTEX_COUNT, DISK_COUNT);
   pass.End();
   wgpu::CommandBuffer commands = encoder.Finish();
   device.GetQueue().Submit(1, &commands);
@@ -88,7 +287,10 @@ void Render() {
 
 void InitGraphics() {
   ConfigureSurface();
+  CreateStorageBuffers();
   CreateRenderPipeline();
+
+  CreateComputePipeline();
 }
 
 EM_BOOL onopen(int eventType, const EmscriptenWebSocketOpenEvent *websocketEvent, void *userData) {
@@ -185,6 +387,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
   framePerf.tick(SDL_GetTicks());
+  update(0);
   Render();
   return SDL_APP_CONTINUE;
 }
