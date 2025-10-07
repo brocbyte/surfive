@@ -13,8 +13,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 
 if(EMSCRIPTEN)
-  add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
   add_executable(surfive WIN32 "client.cpp")
+  add_custom_command(
+      OUTPUT shaders
+      COMMAND python ${CMAKE_SOURCE_DIR}/embed_shader.py ${CMAKE_SOURCE_DIR}/compute_shader.wgsl compute_shader.wgsl.h
+      COMMAND python ${CMAKE_SOURCE_DIR}/embed_shader.py ${CMAKE_SOURCE_DIR}/render_shader.wgsl render_shader.wgsl.h
+      DEPENDS ${CMAKE_SOURCE_DIR}/compute_shader.wgsl ${CMAKE_SOURCE_DIR}/render_shader.wgsl
+  )
+  add_custom_target(generate_shaders ALL DEPENDS shaders)
+  target_include_directories(surfive PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+  add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
   set_target_properties(surfive PROPERTIES SUFFIX ".html")
   set_target_properties(surfive PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/sample.bmp)
   set_target_properties(surfive PROPERTIES LINK_FLAGS
@@ -31,7 +40,7 @@ if(EMSCRIPTEN)
   target_link_libraries(surfive PUBLIC SDL3::SDL3)
   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=emdawnwebgpu -g -gsource-map=inline")
 else()
-  add_executable(server server.cpp)
+  add_executable(server server.cpp DEPENDS generate_shaders)
   target_include_directories(server PRIVATE
     vendored/websocketpp
     vendored/asio/asio/include

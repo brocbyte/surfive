@@ -1,5 +1,4 @@
 ﻿#include "websocket.h"
-#include "surface.h"
 #include "perf_counter.h"
 
 #define SDL_MAIN_USE_CALLBACKS 1
@@ -9,6 +8,10 @@
 #include <webgpu/webgpu.h>
 #include <webgpu/webgpu_cpp.h>
 #include "gpu_buffer.h"
+
+// embed shader codes
+#include "compute_shader.wgsl.h"
+#include "render_shader.wgsl.h"
 
 #include <string>
 #include <format>
@@ -42,35 +45,6 @@ const uint32_t kHeight = 512;
 static SDL_Window *window = NULL;
 PerfCounter<uint64_t> framePerf{0};
 std::unique_ptr<Websocket> ws;
-
-const char computeShaderCode[] = R"(
-  @group(0) @binding(0) var<storage,read_write> diskOffsets : array<f32>;
-  @group(0) @binding(1) var<storage,read_write> diskVelocities : array<f32>;
-
-  @group(0) @binding(2) var<storage> params : array<f32, 3>;
-
-  @compute @workgroup_size(64)
-  fn main(@builtin(global_invocation_id) global_id : vec3u ) {
-    let index = global_id.x; // Invocation number, to be used as an array index.
-       let diskCount = u32(params[0]); // params[0] is the number of disks.
-       if ( index >= 2*diskCount) { // Prevent extra invocations from doing work.
-          return;
-       }
-       let radius = params[1];  // params[i] is the radius of the disks.
-       let dt = params[2];  // params[2] is the time change since previous update.
-       var position = diskOffsets[index];
-       position += diskVelocities[index] * dt;
-       if (position > 1-radius) { // position puts part of disk outside board.
-           diskVelocities[index] = -diskVelocities[index]; // reverse direction.
-           position = 2*(1-radius) - position; // new position after bounce.
-       }
-       else if (position < -1+radius) {
-           diskVelocities[index] = -diskVelocities[index];
-           position = 2*(-1+radius) - position;
-       }
-       diskOffsets[index] = position;   
-  }
-)";
 
 float rand01() {
   static std::random_device rd;
@@ -142,7 +116,7 @@ auto CreateShaderModule(const char *code) {
 }
 
 void CreateComputePipeline() {
-  auto shaderModule = CreateShaderModule(computeShaderCode);
+  auto shaderModule = CreateShaderModule(compute_shader);
 
   std::array<wgpu::BindGroupLayoutEntry, 3> bindGroupLayoutEntries{
       {{.binding = 0,
@@ -189,32 +163,6 @@ void update(float dt) {
   wgpu::CommandBuffer commands = commandEncoder.Finish();
   device.GetQueue().Submit(1, &commands);
 }
-
-const char renderShader[] = R"(
-  struct VertexOutput {
-       @builtin(position) position : vec4f,
-       @location(0) @interpolate(flat) color : vec4f
-   }
-   
-   @group(0) @binding(0) var<storage> diskOffsets : array<vec2f>;
-   @group(0) @binding(1) var<storage> colors : array<vec4f>;
-   @vertex
-   fn vertexMain(@builtin(vertex_index) i : u32,
-             @builtin(instance_index) diskNum : u32,
-             @location(0) position: vec2f) -> VertexOutput {
-      let offset = diskOffsets[diskNum];
-      let color = colors[diskNum];
-      var output : VertexOutput;
-      output.position = vec4f(position + offset, 0, 1);
-      output.color = color;
-      return output;
-   }
-   
-   @fragment
-   fn fragmentMain( @location(0) @interpolate(flat) color : vec4f) -> @location(0) vec4f{
-      return color;
-   }
-)";
 
 auto CreateInstance() {
   static const auto kTimedWaitAny = wgpu::InstanceFeatureName::TimedWaitAny;
@@ -279,7 +227,7 @@ void ConfigureSurface() {
 }
 
 void CreateRenderPipeline() {
-  auto shaderModule = CreateShaderModule(renderShader);
+  auto shaderModule = CreateShaderModule(render_shader);
 
   wgpu::ColorTargetState colorTargetState{.format = format};
 
