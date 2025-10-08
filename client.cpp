@@ -24,6 +24,8 @@ wgpu::Adapter adapter;
 wgpu::Device device;
 wgpu::RenderPipeline pipeline;
 wgpu::BindGroup renderBindGroup;
+wgpu::Texture texture;
+wgpu::TextureView textureView;
 
 wgpu::ComputePipeline computePipeline;
 wgpu::BindGroup computeBindGroup;
@@ -34,8 +36,10 @@ GPUBuffer velocityBuffer;
 GPUBuffer paramsBuffer;
 GPUBuffer colorBuffer;
 
-constexpr int32_t VERTEX_COUNT = 32;
+bool is_compute_draw = true;
+constexpr int32_t DISK_VERTEX_COUNT = 32;
 constexpr int32_t DISK_COUNT = 500;
+constexpr int32_t QUAD_VERTEX_COUNT = 6;
 
 wgpu::Surface surface;
 wgpu::TextureFormat format;
@@ -45,6 +49,58 @@ const uint32_t kHeight = 512;
 static SDL_Window *window = NULL;
 PerfCounter<uint64_t> framePerf{0};
 std::unique_ptr<Websocket> ws;
+
+std::pair<wgpu::Texture, wgpu::TextureView> CreateRGBA8Texture(wgpu::Device device, uint32_t width,
+                                                               uint32_t height) {
+  wgpu::TextureDescriptor texDesc = {
+      .usage = wgpu::TextureUsage::TextureBinding // to sample it from a shader
+               | wgpu::TextureUsage::CopyDst,     // to copy data cpu->gpu
+      .dimension = wgpu::TextureDimension::e2D,
+      .size = {.width = width, .height = height, .depthOrArrayLayers = 1},
+      .format = wgpu::TextureFormat::RGBA8Unorm,
+      .mipLevelCount = 1,
+      .sampleCount = 1,
+      .viewFormatCount = 0,
+      .viewFormats = nullptr};
+
+  wgpu::Texture texture = device.CreateTexture(&texDesc);
+
+  wgpu::TextureViewDescriptor textureViewDesc;
+  textureViewDesc.aspect = wgpu::TextureAspect::All;
+  textureViewDesc.baseArrayLayer = 0;
+  textureViewDesc.arrayLayerCount = 1;
+  textureViewDesc.baseMipLevel = 0;
+  textureViewDesc.mipLevelCount = 1;
+  textureViewDesc.dimension = wgpu::TextureViewDimension::e2D;
+  textureViewDesc.format = texDesc.format;
+  wgpu::TextureView textureView = texture.CreateView(&textureViewDesc);
+
+  std::vector<uint8_t> pixels(4 * texDesc.size.width * texDesc.size.height);
+  for (uint32_t i = 0; i < texDesc.size.width; ++i) {
+    for (uint32_t j = 0; j < texDesc.size.height; ++j) {
+      uint8_t *p = &pixels[4 * (j * texDesc.size.width + i)];
+      p[0] = (uint8_t)i; // r
+      p[1] = (uint8_t)j; // g
+      p[2] = 128;        // b
+      p[3] = 255;        // a
+    }
+  }
+
+  wgpu::TexelCopyTextureInfo destination;
+  destination.texture = texture;
+  destination.mipLevel = 0;
+  destination.origin = {0, 0, 0};
+  destination.aspect = wgpu::TextureAspect::All;
+
+  wgpu::TexelCopyBufferLayout source;
+  source.offset = 0;
+  source.bytesPerRow = 4 * texDesc.size.width;
+  source.rowsPerImage = texDesc.size.height;
+  device.GetQueue().WriteTexture(&destination, pixels.data(), pixels.size(), &source,
+                                 &texDesc.size);
+
+  return {texture, textureView};
+}
 
 float rand01() {
   static std::random_device rd;
@@ -70,18 +126,36 @@ void CreateStorageBuffers() {
     colors[4 * i + 3] = 1.0f;
   }
   std::array<float, 3> params = {static_cast<float>(DISK_COUNT), 0.1f, 0.03f};
-  std::vector<float> vertexCoords(2 * VERTEX_COUNT + 2);
-  vertexCoords[0] = 0.1;
-  vertexCoords[1] = 0;
-  for (int i = 1; i <= VERTEX_COUNT / 2 - 1; i++) {
-    float angle = 2 * 3.14 / VERTEX_COUNT * i;
-    vertexCoords[4 * (i - 1) + 2] = 0.1 * std::cos(angle);
-    vertexCoords[4 * (i - 1) + 3] = -0.1 * std::sin(angle);
-    vertexCoords[4 * (i - 1) + 4] = 0.1 * std::cos(angle);
-    vertexCoords[4 * (i - 1) + 5] = 0.1 * std::sin(angle);
+  std::vector<float> diskVertexCoords(2 * DISK_VERTEX_COUNT + 2);
+  diskVertexCoords[0] = 0.1;
+  diskVertexCoords[1] = 0;
+  for (int i = 1; i <= DISK_VERTEX_COUNT / 2 - 1; i++) {
+    float angle = 2 * 3.14 / DISK_VERTEX_COUNT * i;
+    diskVertexCoords[4 * (i - 1) + 2] = 0.1 * std::cos(angle);
+    diskVertexCoords[4 * (i - 1) + 3] = -0.1 * std::sin(angle);
+    diskVertexCoords[4 * (i - 1) + 4] = 0.1 * std::cos(angle);
+    diskVertexCoords[4 * (i - 1) + 5] = 0.1 * std::sin(angle);
   }
-  vertexCoords[2 * VERTEX_COUNT - 2] = -0.1;
-  vertexCoords[2 * VERTEX_COUNT - 1] = 0;
+  diskVertexCoords[2 * DISK_VERTEX_COUNT - 2] = -0.1;
+  diskVertexCoords[2 * DISK_VERTEX_COUNT - 1] = 0;
+
+  std::vector<float> quadVertexCoords(QUAD_VERTEX_COUNT * 2);
+
+  quadVertexCoords[0] = -1.0;
+  quadVertexCoords[1] = -1.0;
+  quadVertexCoords[2] = -1.0;
+  quadVertexCoords[3] = 1.0;
+  quadVertexCoords[4] = 1.0;
+  quadVertexCoords[5] = -1.0;
+
+  quadVertexCoords[6] = 1.0;
+  quadVertexCoords[7] = 1.0;
+  quadVertexCoords[8] = 1.0;
+  quadVertexCoords[9] = -1.0;
+  quadVertexCoords[10] = -1.0;
+  quadVertexCoords[11] = 1.0;
+  // for (auto& q : quadVertexCoords)
+  //   q /= 2.0;
 
   using enum wgpu::BufferUsage;
 
@@ -94,8 +168,15 @@ void CreateStorageBuffers() {
   paramsBuffer = GPUBuffer(device, Storage | CopyDst, params.size() * sizeof(params[0]));
   paramsBuffer.write(params.begin(), params.end());
 
-  vertexBuffer = GPUBuffer(device, Vertex | CopyDst, vertexCoords.size() * sizeof(vertexCoords[0]));
-  vertexBuffer.write(vertexCoords.begin(), vertexCoords.end());
+  if (!is_compute_draw) {
+    vertexBuffer =
+        GPUBuffer(device, Vertex | CopyDst, diskVertexCoords.size() * sizeof(diskVertexCoords[0]));
+    vertexBuffer.write(diskVertexCoords.begin(), diskVertexCoords.end());
+  } else {
+    vertexBuffer =
+        GPUBuffer(device, Vertex | CopyDst, quadVertexCoords.size() * sizeof(quadVertexCoords[0]));
+    vertexBuffer.write(quadVertexCoords.begin(), quadVertexCoords.end());
+  }
 
   colorBuffer = GPUBuffer(device, Storage | CopyDst, colors.size() * sizeof(colors[0]));
   colorBuffer.write(colors.begin(), colors.end());
@@ -227,12 +308,32 @@ void ConfigureSurface() {
 }
 
 void CreateRenderPipeline() {
+  std::array<wgpu::BindGroupLayoutEntry, 3> bindGroupLayoutEntries{
+      {{.binding = 0,
+        .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+        .buffer = {.type = wgpu::BufferBindingType::ReadOnlyStorage}},
+       {.binding = 1,
+        .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+        .buffer = {.type = wgpu::BufferBindingType::ReadOnlyStorage}},
+       {.binding = 2,
+        .visibility = wgpu::ShaderStage::Fragment,
+        .texture = {.sampleType = wgpu::TextureSampleType::Float,
+                    .viewDimension = wgpu::TextureViewDimension::e2D}}}};
+
+  wgpu::BindGroupLayoutDescriptor bindGroupLayoutDescriptor{
+      .entryCount = bindGroupLayoutEntries.size(), .entries = bindGroupLayoutEntries.data()};
+  wgpu::BindGroupLayout bindGroupLayout = device.CreateBindGroupLayout(&bindGroupLayoutDescriptor);
+  wgpu::PipelineLayoutDescriptor pipelineLayoutDescriptor{.bindGroupLayoutCount = 1,
+                                                          .bindGroupLayouts = &bindGroupLayout};
+  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&pipelineLayoutDescriptor);
   auto shaderModule = CreateShaderModule(render_shader);
 
   wgpu::ColorTargetState colorTargetState{.format = format};
 
-  wgpu::FragmentState fragmentState{
-      .module = shaderModule, .targetCount = 1, .targets = &colorTargetState};
+  wgpu::FragmentState fragmentState{.module = shaderModule,
+                                    .entryPoint = "fragmentMain",
+                                    .targetCount = 1,
+                                    .targets = &colorTargetState};
 
   wgpu::VertexAttribute vertexAttribute{
       .format = wgpu::VertexFormat::Float32x2, .offset = 0, .shaderLocation = 0};
@@ -243,16 +344,21 @@ void CreateRenderPipeline() {
       .attributes = &vertexAttribute,
   };
   wgpu::RenderPipelineDescriptor descriptor{
-      .vertex = {.module = shaderModule, .bufferCount = 1, .buffers = &vertexBufferLayout},
-      .primitive = {.topology = wgpu::PrimitiveTopology::TriangleStrip},
+      .layout = pipelineLayout,
+      .vertex = {.module = shaderModule,
+                 .entryPoint = "vertexMain",
+                 .bufferCount = 1,
+                 .buffers = &vertexBufferLayout},
+      .primitive = {.topology = wgpu::PrimitiveTopology::TriangleList},
       .fragment = &fragmentState};
   pipeline = device.CreateRenderPipeline(&descriptor);
 
-  std::array<wgpu::BindGroupEntry, 2> entries{
+  std::array<wgpu::BindGroupEntry, 3> entries{
       {{.binding = 0, .buffer = offsetBuffer, .offset = 0, .size = offsetBuffer.size()},
-       {.binding = 1, .buffer = colorBuffer, .offset = 0, .size = colorBuffer.size()}}};
+       {.binding = 1, .buffer = colorBuffer, .offset = 0, .size = colorBuffer.size()},
+       {.binding = 2, .textureView = textureView}}};
   wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Render Bind Group",
-                                                .layout = pipeline.GetBindGroupLayout(0),
+                                                .layout = bindGroupLayout,
                                                 .entryCount = entries.size(),
                                                 .entries = entries.data()};
   renderBindGroup = device.CreateBindGroup(&bindGroupDescriptor);
@@ -273,7 +379,10 @@ void Render() {
   pass.SetPipeline(pipeline);
   pass.SetVertexBuffer(0, vertexBuffer);
   pass.SetBindGroup(0, renderBindGroup);
-  pass.Draw(VERTEX_COUNT, DISK_COUNT);
+  if (!is_compute_draw)
+    pass.Draw(DISK_VERTEX_COUNT, DISK_COUNT);
+  else
+    pass.Draw(QUAD_VERTEX_COUNT);
   pass.End();
   wgpu::CommandBuffer commands = encoder.Finish();
   device.GetQueue().Submit(1, &commands);
@@ -284,6 +393,9 @@ void InitGraphics() {
   surface = CreateSurface();
   ConfigureSurface();
   CreateStorageBuffers();
+  auto t = CreateRGBA8Texture(device, 256, 256);
+  texture = t.first;
+  textureView = t.second;
   CreateRenderPipeline();
   CreateComputePipeline();
 }
