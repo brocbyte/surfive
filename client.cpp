@@ -36,8 +36,6 @@ GPUBuffer velocityBuffer;
 GPUBuffer paramsBuffer;
 GPUBuffer colorBuffer;
 
-bool is_compute_draw = true;
-constexpr int32_t DISK_VERTEX_COUNT = 32;
 constexpr int32_t DISK_COUNT = 500;
 constexpr int32_t QUAD_VERTEX_COUNT = 6;
 
@@ -126,36 +124,10 @@ void CreateStorageBuffers() {
     colors[4 * i + 3] = 1.0f;
   }
   std::array<float, 3> params = {static_cast<float>(DISK_COUNT), 0.1f, 0.03f};
-  std::vector<float> diskVertexCoords(2 * DISK_VERTEX_COUNT + 2);
-  diskVertexCoords[0] = 0.1;
-  diskVertexCoords[1] = 0;
-  for (int i = 1; i <= DISK_VERTEX_COUNT / 2 - 1; i++) {
-    float angle = 2 * 3.14 / DISK_VERTEX_COUNT * i;
-    diskVertexCoords[4 * (i - 1) + 2] = 0.1 * std::cos(angle);
-    diskVertexCoords[4 * (i - 1) + 3] = -0.1 * std::sin(angle);
-    diskVertexCoords[4 * (i - 1) + 4] = 0.1 * std::cos(angle);
-    diskVertexCoords[4 * (i - 1) + 5] = 0.1 * std::sin(angle);
-  }
-  diskVertexCoords[2 * DISK_VERTEX_COUNT - 2] = -0.1;
-  diskVertexCoords[2 * DISK_VERTEX_COUNT - 1] = 0;
 
-  std::vector<float> quadVertexCoords(QUAD_VERTEX_COUNT * 2);
-
-  quadVertexCoords[0] = -1.0;
-  quadVertexCoords[1] = -1.0;
-  quadVertexCoords[2] = -1.0;
-  quadVertexCoords[3] = 1.0;
-  quadVertexCoords[4] = 1.0;
-  quadVertexCoords[5] = -1.0;
-
-  quadVertexCoords[6] = 1.0;
-  quadVertexCoords[7] = 1.0;
-  quadVertexCoords[8] = 1.0;
-  quadVertexCoords[9] = -1.0;
-  quadVertexCoords[10] = -1.0;
-  quadVertexCoords[11] = 1.0;
-  // for (auto& q : quadVertexCoords)
-  //   q /= 2.0;
+  std::vector<float> quadVertexCoords = {-1.0, -1.0, -1.0, 1.0,  1.0,  -1.0,
+                                         1.0,  1.0,  1.0,  -1.0, -1.0, 1.0};
+  assert(quadVertexCoords.size() == QUAD_VERTEX_COUNT * 2);
 
   using enum wgpu::BufferUsage;
 
@@ -168,15 +140,9 @@ void CreateStorageBuffers() {
   paramsBuffer = GPUBuffer(device, Storage | CopyDst, params.size() * sizeof(params[0]));
   paramsBuffer.write(params.begin(), params.end());
 
-  if (!is_compute_draw) {
-    vertexBuffer =
-        GPUBuffer(device, Vertex | CopyDst, diskVertexCoords.size() * sizeof(diskVertexCoords[0]));
-    vertexBuffer.write(diskVertexCoords.begin(), diskVertexCoords.end());
-  } else {
-    vertexBuffer =
-        GPUBuffer(device, Vertex | CopyDst, quadVertexCoords.size() * sizeof(quadVertexCoords[0]));
-    vertexBuffer.write(quadVertexCoords.begin(), quadVertexCoords.end());
-  }
+  vertexBuffer =
+      GPUBuffer(device, Vertex | CopyDst, quadVertexCoords.size() * sizeof(quadVertexCoords[0]));
+  vertexBuffer.write(quadVertexCoords.begin(), quadVertexCoords.end());
 
   colorBuffer = GPUBuffer(device, Storage | CopyDst, colors.size() * sizeof(colors[0]));
   colorBuffer.write(colors.begin(), colors.end());
@@ -379,10 +345,7 @@ void Render() {
   pass.SetPipeline(pipeline);
   pass.SetVertexBuffer(0, vertexBuffer);
   pass.SetBindGroup(0, renderBindGroup);
-  if (!is_compute_draw)
-    pass.Draw(DISK_VERTEX_COUNT, DISK_COUNT);
-  else
-    pass.Draw(QUAD_VERTEX_COUNT);
+  pass.Draw(QUAD_VERTEX_COUNT);
   pass.End();
   wgpu::CommandBuffer commands = encoder.Finish();
   device.GetQueue().Submit(1, &commands);
