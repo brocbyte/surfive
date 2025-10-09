@@ -44,15 +44,20 @@ wgpu::TextureFormat format;
 const uint32_t kWidth = 512;
 const uint32_t kHeight = 512;
 
+const uint32_t texWidth = 256;
+const uint32_t texHeight = 256;
+
 static SDL_Window *window = NULL;
 PerfCounter<uint64_t> framePerf{0};
 std::unique_ptr<Websocket> ws;
 
 std::pair<wgpu::Texture, wgpu::TextureView> CreateRGBA8Texture(wgpu::Device device, uint32_t width,
                                                                uint32_t height) {
+  using enum wgpu::TextureUsage;
   wgpu::TextureDescriptor texDesc = {
-      .usage = wgpu::TextureUsage::TextureBinding // to sample it from a shader
-               | wgpu::TextureUsage::CopyDst,     // to copy data cpu->gpu
+      .usage = TextureBinding    // to sample it from a shader
+               | CopyDst         // to copy data cpu->gpu
+               | StorageBinding, // to write to it from the compute shader
       .dimension = wgpu::TextureDimension::e2D,
       .size = {.width = width, .height = height, .depthOrArrayLayers = 1},
       .format = wgpu::TextureFormat::RGBA8Unorm,
@@ -159,22 +164,48 @@ auto CreateShaderModule(const char *code) {
       [](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, const char *message) {
         std::cerr << "Device error: " << message << std::endl;
       });
+
+  wgpu::Future f1 = shaderModule.GetCompilationInfo(
+      wgpu::CallbackMode::WaitAnyOnly,
+      [](wgpu::CompilationInfoRequestStatus status, wgpu::CompilationInfo const *info) {
+        if (status != wgpu::CompilationInfoRequestStatus::Success) {
+          std::cerr << "Failed to get shader compilation info\n";
+          return;
+        }
+        for (uint32_t i = 0; i < info->messageCount; ++i) {
+          const auto &msg = info->messages[i];
+          std::string_view typeStr;
+          switch (msg.type) {
+          case wgpu::CompilationMessageType::Error:
+            typeStr = "Error";
+            break;
+          case wgpu::CompilationMessageType::Warning:
+            typeStr = "Warning";
+            break;
+          case wgpu::CompilationMessageType::Info:
+            typeStr = "Info";
+            break;
+          default:
+            typeStr = "Unknown";
+            break;
+          }
+          std::cerr << typeStr << " (" << msg.lineNum << ":" << msg.linePos
+                    << "): " << msg.message.data << "\n";
+        }
+      });
+  instance.WaitAny(f1, UINT64_MAX);
   return shaderModule;
 }
 
 void CreateComputePipeline() {
   auto shaderModule = CreateShaderModule(compute_shader);
 
-  std::array<wgpu::BindGroupLayoutEntry, 3> bindGroupLayoutEntries{
+  std::array<wgpu::BindGroupLayoutEntry, 1> bindGroupLayoutEntries{
       {{.binding = 0,
         .visibility = wgpu::ShaderStage::Compute,
-        .buffer = {.type = wgpu::BufferBindingType::Storage}},
-       {.binding = 1,
-        .visibility = wgpu::ShaderStage::Compute,
-        .buffer = {.type = wgpu::BufferBindingType::Storage}},
-       {.binding = 2,
-        .visibility = wgpu::ShaderStage::Compute,
-        .buffer = {.type = wgpu::BufferBindingType::ReadOnlyStorage}}}};
+        .storageTexture = {.access = wgpu::StorageTextureAccess::WriteOnly,
+                           .format = wgpu::TextureFormat::RGBA8Unorm,
+                           .viewDimension = wgpu::TextureViewDimension::e2D}}}};
   wgpu::BindGroupLayoutDescriptor bindGroupLayoutDescriptor{
       .entryCount = bindGroupLayoutEntries.size(), .entries = bindGroupLayoutEntries.data()};
   wgpu::BindGroupLayout bindGroupLayout = device.CreateBindGroupLayout(&bindGroupLayoutDescriptor);
@@ -187,9 +218,7 @@ void CreateComputePipeline() {
 
   computePipeline = device.CreateComputePipeline(&pipelineDescriptor);
 
-  std::array<wgpu::BindGroupEntry, 3> entries{{{.binding = 0, .buffer = offsetBuffer},
-                                               {.binding = 1, .buffer = velocityBuffer},
-                                               {.binding = 2, .buffer = paramsBuffer}}};
+  std::array<wgpu::BindGroupEntry, 1> entries{{{.binding = 0, .textureView = textureView}}};
   wgpu::BindGroupDescriptor bindGroupDescriptor{.label = "Compute Bind Group",
                                                 .layout = computePipeline.GetBindGroupLayout(0),
                                                 .entryCount = entries.size(),
@@ -203,7 +232,7 @@ void update(float dt) {
 
   passEncoder.SetPipeline(computePipeline);
   passEncoder.SetBindGroup(0, computeBindGroup);
-  int32_t workGroupCount = std::ceil((2.0 * DISK_COUNT) / 64);
+  int32_t workGroupCount = std::ceil((texWidth * texHeight) / 64);
   passEncoder.DispatchWorkgroups(workGroupCount);
   passEncoder.End();
 
@@ -356,7 +385,7 @@ void InitGraphics() {
   surface = CreateSurface();
   ConfigureSurface();
   CreateStorageBuffers();
-  auto t = CreateRGBA8Texture(device, 256, 256);
+  auto t = CreateRGBA8Texture(device, texWidth, texHeight);
   texture = t.first;
   textureView = t.second;
   CreateRenderPipeline();
